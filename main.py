@@ -8,6 +8,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import create_react_agent
+import json
 
 
 async def main():
@@ -18,7 +19,11 @@ async def main():
                 messages = resp["messages"]
                 if isinstance(messages, list):
                     for msg in reversed(messages):
-                        if hasattr(msg, 'content') and hasattr(msg, '__class__') and 'AIMessage' in str(type(msg)):
+                        if (
+                            hasattr(msg, "content")
+                            and hasattr(msg, "__class__")
+                            and "AIMessage" in str(type(msg))
+                        ):
                             return msg.content
                         elif isinstance(msg, dict) and msg.get("type") == "ai":
                             return msg.get("content", "")
@@ -30,29 +35,29 @@ async def main():
             return str(resp)
         elif isinstance(resp, list):
             for item in reversed(resp):
-                if hasattr(item, 'content') and hasattr(item, '__class__') and 'AIMessage' in str(type(item)):
+                if (
+                    hasattr(item, "content")
+                    and hasattr(item, "__class__")
+                    and "AIMessage" in str(type(item))
+                ):
                     return item.content
                 elif isinstance(item, dict) and item.get("type") == "ai":
                     return item.get("content", "")
             answers = [extract_answer(item) for item in resp]
             return "\n---\n".join(str(a) for a in answers if a)
         else:
-            if hasattr(resp, 'content'):
+            if hasattr(resp, "content"):
                 return resp.content
             try:
                 return str(resp)
             except Exception:
                 return f"<{type(resp).__name__}>"
-    server_params = StdioServerParameters(
-        command="uvx",
-        # Make sure to update to the full absolute path to your math_server.py file
-        args=[
-            "--from",
-            "awslabs-aws-documentation-mcp-server",
-            "awslabs.aws-documentation-mcp-server.exe",
-        ],
-    )
 
+    with open("server_params.json", encoding="utf-8") as f:
+        params = json.load(f)
+    server_params = StdioServerParameters(
+        command=params["command"], args=params["args"]
+    )
 
     # Gradio用の非同期チャット関数
     async def gradio_chat(user_input, history):
@@ -71,16 +76,30 @@ async def main():
                         messages = agent_response["messages"]
                         if isinstance(messages, list):
                             for msg in messages:
-                                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                                if hasattr(msg, "tool_calls") and msg.tool_calls:
                                     for tool_call in msg.tool_calls:
-                                        tool_name = tool_call.get('name') if isinstance(tool_call, dict) else getattr(tool_call, 'name', str(tool_call))
-                                        tool_args = tool_call.get('args') if isinstance(tool_call, dict) else getattr(tool_call, 'args', {})
-                                        tool_history.append(f"ツール名: {tool_name}, 引数: {tool_args}")
+                                        tool_name = (
+                                            tool_call.get("name")
+                                            if isinstance(tool_call, dict)
+                                            else getattr(
+                                                tool_call, "name", str(tool_call)
+                                            )
+                                        )
+                                        tool_args = (
+                                            tool_call.get("args")
+                                            if isinstance(tool_call, dict)
+                                            else getattr(tool_call, "args", {})
+                                        )
+                                        tool_history.append(
+                                            f"ツール名: {tool_name}, 引数: {tool_args}"
+                                        )
                     if "tool_calls" in agent_response:
                         calls = agent_response["tool_calls"]
                         if calls:
                             for call in calls:
-                                tool_history.append(f"ツール名: {call.get('tool_name', call.get('name', 'Unknown'))}, 入力: {call.get('input', call.get('args', {}))}")
+                                tool_history.append(
+                                    f"ツール名: {call.get('tool_name', call.get('name', 'Unknown'))}, 入力: {call.get('input', call.get('args', {}))}"
+                                )
                 # 履歴表示
                 if tool_history:
                     answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
@@ -143,28 +162,25 @@ async def main():
         """
     ) as demo:
         gr.Markdown("# LangChain MCP チャット", elem_classes=["title"])
-        
+
         # チャットボット（画面いっぱいに表示）
         chatbot = gr.Chatbot(
             type="messages",
             height="calc(100vh - 140px)",
             elem_classes=["chat-container"],
-            container=True
+            container=True,
         )
-        
+
         # 入力フォーム（下端に固定）
         with gr.Row(elem_classes=["input-container"]):
             txt = gr.Textbox(
-                show_label=False, 
+                show_label=False,
                 placeholder="メッセージを入力してください...",
                 container=False,
-                elem_classes=["textbox"]
+                elem_classes=["textbox"],
             )
             send_btn = gr.Button(
-                "📤", 
-                size="sm",
-                variant="primary",
-                elem_classes=["button"]
+                "📤", size="sm", variant="primary", elem_classes=["button"]
             )
 
         def user_submit(user_input, history):
@@ -172,7 +188,10 @@ async def main():
                 return "", history
             response = sync_gradio_chat(user_input, history)
             # messages形式に変換
-            new_history = history + [{"role": "user", "content": user_input}, {"role": "assistant", "content": response}]
+            new_history = history + [
+                {"role": "user", "content": user_input},
+                {"role": "assistant", "content": response},
+            ]
             return "", new_history
 
         txt.submit(user_submit, [txt, chatbot], [txt, chatbot])
