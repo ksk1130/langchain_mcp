@@ -11,4 +11,5 @@ dependencies = [
     "langchain-openai>=0.3.28",
     "langgraph>=0.5.4",
     "mcp>=1.12.2",
+    "gradio>=4.0.0",
 ]
