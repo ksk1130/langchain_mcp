@@ -79,31 +79,39 @@ async def main():
         Returns:
             str: エージェントの回答（ツール履歴含む場合あり）
         """
+        # Gradioの履歴(messages形式)をLangChainの履歴に変換
+        messages = []
+        if history:
+            for msg in history:
+                if msg.get("role") == "user":
+                    messages.append({"type": "human", "content": msg["content"]})
+                elif msg.get("role") == "assistant":
+                    messages.append({"type": "ai", "content": msg["content"]})
+        # 今回のユーザー入力を追加
+        messages.append({"type": "human", "content": user_input})
+
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = await load_mcp_tools(session)
                 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-                # functionCallingの有無でツールリストを切り替え
                 agent_tools = tools if function_calling == "有効" else []
                 agent = create_react_agent(model, agent_tools)
-                agent_response = await agent.ainvoke({"messages": user_input})
+                agent_response = await agent.ainvoke({"messages": messages})
                 answer = extract_answer(agent_response)
                 # ツール履歴抽出
                 tool_history = []
                 if isinstance(agent_response, dict):
                     if "messages" in agent_response:
-                        messages = agent_response["messages"]
-                        if isinstance(messages, list):
-                            for msg in messages:
+                        messages_resp = agent_response["messages"]
+                        if isinstance(messages_resp, list):
+                            for msg in messages_resp:
                                 if hasattr(msg, "tool_calls") and msg.tool_calls:
                                     for tool_call in msg.tool_calls:
                                         tool_name = (
                                             tool_call.get("name")
                                             if isinstance(tool_call, dict)
-                                            else getattr(
-                                                tool_call, "name", str(tool_call)
-                                            )
+                                            else getattr(tool_call, "name", str(tool_call))
                                         )
                                         tool_args = (
                                             tool_call.get("args")
@@ -120,7 +128,6 @@ async def main():
                                 tool_history.append(
                                     f"ツール名: {call.get('tool_name', call.get('name', 'Unknown'))}, 入力: {call.get('input', call.get('args', {}))}"
                                 )
-                # 履歴表示
                 if tool_history:
                     answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
                 return answer
