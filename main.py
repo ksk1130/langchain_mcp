@@ -14,6 +14,14 @@ import json
 async def main():
     # エージェント応答から回答テキストを抽出する関数
     def extract_answer(resp):
+        """
+        エージェント応答から回答テキストのみを抽出する関数。
+        dict, list, オブジェクト型に対応し、AIMessageのcontentや代表的な回答キーを優先して返す。
+        Args:
+            resp: エージェントから返された応答オブジェクト
+        Returns:
+            str: 回答テキスト
+        """
         if isinstance(resp, dict):
             if "messages" in resp:
                 messages = resp["messages"]
@@ -61,6 +69,16 @@ async def main():
 
     # Gradio用の非同期チャット関数
     async def gradio_chat(user_input, history, function_calling):
+        """
+        GradioのチャットUIから呼ばれる非同期チャット関数。
+        ユーザー入力・履歴・functionCalling有無を受け取り、エージェント応答を返す。
+        Args:
+            user_input (str): ユーザーの入力テキスト
+            history (list): チャット履歴
+            function_calling (str): ツール呼び出し有効/無効
+        Returns:
+            str: エージェントの回答（ツール履歴含む場合あり）
+        """
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -108,6 +126,15 @@ async def main():
                 return answer
 
     def sync_gradio_chat(user_input, history, function_calling):
+        """
+        非同期gradio_chat関数を同期的に呼び出すラッパー。
+        Args:
+            user_input (str): ユーザーの入力テキスト
+            history (list): チャット履歴
+            function_calling (str): ツール呼び出し有効/無効
+        Returns:
+            str: エージェントの回答
+        """
         return asyncio.run(gradio_chat(user_input, history, function_calling))
 
     with gr.Blocks(
@@ -212,6 +239,16 @@ async def main():
             )
 
         def user_submit(user_input, history, function_calling):
+            """
+            Gradioの送信イベントから呼ばれるコールバック関数。
+            ユーザー入力・履歴・functionCalling有無を受け取り、チャット履歴を更新する。
+            Args:
+                user_input (str): ユーザーの入力テキスト
+                history (list): チャット履歴
+                function_calling (str): ツール呼び出し有効/無効
+            Returns:
+                tuple: (空文字, 更新後履歴)
+            """
             if not user_input.strip():
                 return "", history
             response = sync_gradio_chat(user_input, history, function_calling)
