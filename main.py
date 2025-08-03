@@ -60,13 +60,15 @@ async def main():
     )
 
     # Gradio用の非同期チャット関数
-    async def gradio_chat(user_input, history):
+    async def gradio_chat(user_input, history, function_calling):
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = await load_mcp_tools(session)
                 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-                agent = create_react_agent(model, tools)
+                # functionCallingの有無でツールリストを切り替え
+                agent_tools = tools if function_calling == "有効" else []
+                agent = create_react_agent(model, agent_tools)
                 agent_response = await agent.ainvoke({"messages": user_input})
                 answer = extract_answer(agent_response)
                 # ツール履歴抽出
@@ -105,10 +107,11 @@ async def main():
                     answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
                 return answer
 
-    def sync_gradio_chat(user_input, history):
-        return asyncio.run(gradio_chat(user_input, history))
+    def sync_gradio_chat(user_input, history, function_calling):
+        return asyncio.run(gradio_chat(user_input, history, function_calling))
 
     with gr.Blocks(
+        theme=gr.themes.Soft(),
         css="""
         .gradio-container {
             height: 100vh !important;
@@ -124,14 +127,14 @@ async def main():
         }
         .chat-container {
             flex: 1 !important;
-            height: calc(100vh - 140px) !important;
-            min-height: calc(100vh - 140px) !important;
-            max-height: calc(100vh - 140px) !important;
+            height: calc(100vh - 220px) !important;
+            min-height: calc(100vh - 220px) !important;
+            max-height: calc(100vh - 220px) !important;
             overflow: auto !important;
         }
         .input-container {
             flex-shrink: 0 !important;
-            padding: 10px !important;
+            padding: 3px !important;
             margin: 0 !important;
             position: fixed !important;
             bottom: 0 !important;
@@ -140,9 +143,10 @@ async def main():
             background: white !important;
             border-top: 1px solid #ddd !important;
             display: flex !important;
-            gap: 10px !important;
+            gap: 3px !important;
             align-items: center !important;
         }
+        /* 
         .input-container .textbox {
             flex: 1 !important;
             margin: 0 !important;
@@ -153,11 +157,25 @@ async def main():
             height: 40px !important;
             margin: 0 !important;
         }
+        .function-radio {
+            position: fixed !important;
+            bottom: 60px !important;
+            left: 0 !important;
+            right: 0 !important;
+            border-top: 1px solid #eee !important;
+            padding: 10px 20px !important;
+            z-index: 10 !important;
+            display: flex !important;
+            justify-content: flex-end !important;
+            align-items: center !important;
+            height: 40px !important;
+        }
+        */
         /* チャットボットの高さを固定 */
         .chatbot {
-            height: calc(100vh - 140px) !important;
-            min-height: calc(100vh - 140px) !important;
-            max-height: calc(100vh - 140px) !important;
+            height: calc(100vh - 180px) !important;
+            min-height: calc(100vh - 180px) !important;
+            max-height: calc(100vh - 180px) !important;
         }
         """
     ) as demo:
@@ -166,10 +184,20 @@ async def main():
         # チャットボット（画面いっぱいに表示）
         chatbot = gr.Chatbot(
             type="messages",
-            height="calc(100vh - 140px)",
+            height="calc(100vh - 220px)",
             elem_classes=["chat-container"],
             container=True,
         )
+
+        # functionCallingラジオボタン（下端の少し上に固定）
+        with gr.Row(elem_classes=["function-radio"]):
+            gr.Markdown("<span style='font-size:16px;'>ツール呼び出し（Function Calling）を有効にするか選択してください：</span>", show_label=False)
+            function_radio = gr.Radio(
+                ["有効", "無効"],
+                value="有効",
+                label=None,
+                container=False
+            )
 
         # 入力フォーム（下端に固定）
         with gr.Row(elem_classes=["input-container"]):
@@ -183,10 +211,10 @@ async def main():
                 "📤", size="sm", variant="primary", elem_classes=["button"]
             )
 
-        def user_submit(user_input, history):
+        def user_submit(user_input, history, function_calling):
             if not user_input.strip():
                 return "", history
-            response = sync_gradio_chat(user_input, history)
+            response = sync_gradio_chat(user_input, history, function_calling)
             # messages形式に変換
             new_history = history + [
                 {"role": "user", "content": user_input},
@@ -194,8 +222,8 @@ async def main():
             ]
             return "", new_history
 
-        txt.submit(user_submit, [txt, chatbot], [txt, chatbot])
-        send_btn.click(user_submit, [txt, chatbot], [txt, chatbot])
+        txt.submit(user_submit, [txt, chatbot, function_radio], [txt, chatbot])
+        send_btn.click(user_submit, [txt, chatbot, function_radio], [txt, chatbot])
 
     demo.launch(share=False, server_name="0.0.0.0", server_port=7860)
 
