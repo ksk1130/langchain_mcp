@@ -3,7 +3,7 @@
 import os
 import gradio as gr
 import asyncio
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -66,6 +66,8 @@ async def main():
     server_params = StdioServerParameters(
         command=params["command"], args=params["args"]
     )
+    # OpenAI base_url指定（server_params.jsonにbase_urlキーがあれば渡す）
+    openai_base_url = params.get("base_url")
 
     # Gradio用の非同期チャット関数
     async def gradio_chat(user_input, history, function_calling):
@@ -94,7 +96,11 @@ async def main():
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = await load_mcp_tools(session)
-                model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+                # base_url指定があれば渡す
+                if openai_base_url:
+                    model = ChatOpenAI(model="gpt-4.1", base_url=openai_base_url)
+                else:
+                    model = ChatOpenAI(model="gpt-4.1")
                 agent_tools = tools if function_calling == "有効" else []
                 agent = create_react_agent(model, agent_tools)
                 agent_response = await agent.ainvoke({"messages": messages})
