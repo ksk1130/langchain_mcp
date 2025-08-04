@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamablehttp_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import create_react_agent
 
@@ -103,6 +104,12 @@ async def main():
                 if conf.get("type") == "sse":
                     # SSEクライアントを使用
                     async with sse_client(conf["url"]) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            tools = await load_mcp_tools(session)
+                            all_tools.extend(tools)
+                elif conf.get("type") == "http":
+                    async with streamablehttp_client(conf["url"]) as (read, write):
                         async with ClientSession(read, write) as session:
                             await session.initialize()
                             tools = await load_mcp_tools(session)

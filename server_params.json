@@ -1,8 +1,12 @@
 {
-  "command": "uvx",
-  "args": [
-    "--from",
-    "awslabs-aws-documentation-mcp-server",
-    "awslabs.aws-documentation-mcp-server.exe"
-  ]
+  "servers": {
+    "awslabs": {
+      "type": "sse",
+      "url": "http://localhost:8010/sse"
+    },
+    "microsoft.docs.mcp": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp"
+    }
+  }
 }
