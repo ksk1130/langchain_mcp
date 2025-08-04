@@ -829,6 +829,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "mcp" },
+    { name = "mcp-proxy" },
 ]
 
 [package.metadata]
@@ -840,6 +841,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=0.3.28" },
     { name = "langgraph", specifier = ">=0.5.4" },
     { name = "mcp", specifier = ">=1.12.2" },
+    { name = "mcp-proxy", specifier = ">=0.8.2" },
 ]
 
 [[package]]
@@ -1036,6 +1038,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/85/f36d538b1286b7758f35c1b69d93f2719d2df90c01bd074eadd35f6afc35/mcp-1.12.2.tar.gz", hash = "sha256:a4b7c742c50ce6ed6d6a6c096cca0e3893f5aecc89a59ed06d47c4e6ba41edcc", size = 426202, upload-time = "2025-07-24T18:29:05.175Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2f/cf/3fd38cfe43962452e4bfadc6966b2ea0afaf8e0286cb3991c247c8c33ebd/mcp-1.12.2-py3-none-any.whl", hash = "sha256:b86d584bb60193a42bd78aef01882c5c42d614e416cbf0480149839377ab5a5f", size = 158473, upload-time = "2025-07-24T18:29:03.419Z" },
+]
+
+[[package]]
+name = "mcp-proxy"
+version = "0.8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mcp" },
+    { name = "uvicorn" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6a/94/0d4a824f33562f59cb83f55227857539238b63f6175fce4b66920e4227d5/mcp_proxy-0.8.2.tar.gz", hash = "sha256:5d113da6c965bef04202ed2525c6642cfbb786e2517fff8b7c209d58d5a6d00e", size = 30526, upload-time = "2025-07-05T13:48:37.749Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/e3/5daf3248a82036ebafcce0387de4098c97102383562dc3f86f19429a6702/mcp_proxy-0.8.2-py3-none-any.whl", hash = "sha256:6974fee896267c6a2444c064b80818a68e08629adc2acf35ac147abd6ae435b2", size = 19276, upload-time = "2025-07-05T13:48:36.677Z" },
 ]
 
 [[package]]
