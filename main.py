@@ -3,12 +3,13 @@
 import os
 import gradio as gr
 import asyncio
+import json
 from langchain_openai import ChatOpenAI
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import create_react_agent
-import json
 
 
 async def main():
@@ -61,13 +62,16 @@ async def main():
             except Exception:
                 return f"<{type(resp).__name__}>"
 
+    # server_params.jsonからサーバー設定を読み込み
     with open("server_params.json", encoding="utf-8") as f:
         params = json.load(f)
-    server_params = StdioServerParameters(
-        command=params["command"], args=params["args"]
-    )
-    # OpenAI base_url指定（server_params.jsonにbase_urlキーがあれば渡す）
-    openai_base_url = params.get("base_url")
+    
+    # LLMの初期化
+    base_url = params.get("base_url")
+    if base_url:
+        llm = ChatOpenAI(model="gpt-4.1", base_url=base_url)
+    else:
+        llm = ChatOpenAI(model="gpt-4.1")
 
     # Gradio用の非同期チャット関数
     async def gradio_chat(user_input, history, function_calling):
@@ -92,51 +96,70 @@ async def main():
         # 今回のユーザー入力を追加
         messages.append({"type": "human", "content": user_input})
 
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                tools = await load_mcp_tools(session)
-                # base_url指定があれば渡す
-                if openai_base_url:
-                    model = ChatOpenAI(model="gpt-4.1", base_url=openai_base_url)
-                else:
-                    model = ChatOpenAI(model="gpt-4.1")
-                agent_tools = tools if function_calling == "有効" else []
-                agent = create_react_agent(model, agent_tools)
-                agent_response = await agent.ainvoke({"messages": messages})
-                answer = extract_answer(agent_response)
-                # ツール履歴抽出
-                tool_history = []
-                if isinstance(agent_response, dict):
-                    if "messages" in agent_response:
-                        messages_resp = agent_response["messages"]
-                        if isinstance(messages_resp, list):
-                            for msg in messages_resp:
-                                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                    for tool_call in msg.tool_calls:
-                                        tool_name = (
-                                            tool_call.get("name")
-                                            if isinstance(tool_call, dict)
-                                            else getattr(tool_call, "name", str(tool_call))
-                                        )
-                                        tool_args = (
-                                            tool_call.get("args")
-                                            if isinstance(tool_call, dict)
-                                            else getattr(tool_call, "args", {})
-                                        )
-                                        tool_history.append(
-                                            f"ツール名: {tool_name}, 引数: {tool_args}"
-                                        )
-                    if "tool_calls" in agent_response:
-                        calls = agent_response["tool_calls"]
-                        if calls:
-                            for call in calls:
-                                tool_history.append(
-                                    f"ツール名: {call.get('tool_name', call.get('name', 'Unknown'))}, 入力: {call.get('input', call.get('args', {}))}"
+        # 各サーバからツールを取得して統合
+        all_tools = []
+        for name, conf in params.get("servers", {}).items():
+            try:
+                if conf.get("type") == "sse":
+                    # SSEクライアントを使用
+                    async with sse_client(conf["url"]) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            tools = await load_mcp_tools(session)
+                            all_tools.extend(tools)
+                elif conf.get("type") == "stdio":
+                    # stdioクライアントを使用（従来通り）
+                    from mcp import StdioServerParameters
+                    server_params = StdioServerParameters(
+                        command=conf["command"], 
+                        args=conf["args"]
+                    )
+                    async with stdio_client(server_params) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            tools = await load_mcp_tools(session)
+                            all_tools.extend(tools)
+            except Exception as e:
+                print(f"サーバー {name} からツール取得中にエラー: {e}")
+                continue
+        
+        agent_tools = all_tools if function_calling == "有効" else []
+        agent = create_react_agent(llm, agent_tools)
+        agent_response = await agent.ainvoke({"messages": messages})
+        answer = extract_answer(agent_response)
+        
+        # ツール履歴抽出
+        tool_history = []
+        if isinstance(agent_response, dict):
+            if "messages" in agent_response:
+                messages_resp = agent_response["messages"]
+                if isinstance(messages_resp, list):
+                    for msg in messages_resp:
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            for tool_call in msg.tool_calls:
+                                tool_name = (
+                                    tool_call.get("name")
+                                    if isinstance(tool_call, dict)
+                                    else getattr(tool_call, "name", str(tool_call))
                                 )
-                if tool_history:
-                    answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
-                return answer
+                                tool_args = (
+                                    tool_call.get("args")
+                                    if isinstance(tool_call, dict)
+                                    else getattr(tool_call, "args", {})
+                                )
+                                tool_history.append(
+                                    f"ツール名: {tool_name}, 引数: {tool_args}"
+                                )
+            if "tool_calls" in agent_response:
+                calls = agent_response["tool_calls"]
+                if calls:
+                    for call in calls:
+                        tool_history.append(
+                            f"ツール名: {call.get('tool_name', call.get('name', 'Unknown'))}, 入力: {call.get('input', call.get('args', {}))}"
+                        )
+        if tool_history:
+            answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
+        return answer
 
     def sync_gradio_chat(user_input, history, function_calling):
         """
