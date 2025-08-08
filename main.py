@@ -11,9 +11,10 @@ from langgraph.prebuilt import create_react_agent
 global_client = None
 global_tools = []
 
-async def main():
+
+async def main() -> None:
     # エージェント応答から回答テキストを抽出する関数
-    def extract_answer(resp):
+    def extract_answer(resp) -> str:
         """
         エージェント応答から回答テキストのみを抽出する関数。
         dict, list, オブジェクト型に対応し、AIMessageのcontentや代表的な回答キーを優先して返す。
@@ -64,7 +65,7 @@ async def main():
     # server_params.jsonからサーバー設定を読み込み
     with open("server_params.json", encoding="utf-8") as f:
         params = json.load(f)
-    
+
     # LLMの初期化
     base_url = params.get("base_url")
     if base_url:
@@ -74,7 +75,7 @@ async def main():
 
     # アプリ起動時にclientとtoolsを一度取得して使い回す
     print("=== MCPクライアントとツールを初期化中... ===")
-    
+
     # グローバルクライアントとツールを初期化
     try:
         global global_client
@@ -82,7 +83,7 @@ async def main():
         global global_tools
         global_tools = await global_client.get_tools()
         print(f"初期化完了: {len(global_tools)} 個のツールが利用可能です")
-        
+
         # ツール一覧を表示
         for i, tool in enumerate(global_tools, 1):
             tool_name = getattr(tool, "name", "Unknown")
@@ -93,7 +94,7 @@ async def main():
         global_tools = []
 
     # 利用可能なツール一覧を取得する関数
-    async def get_available_tools():
+    async def get_available_tools() -> str:
         """
         初期化済みのグローバルツールから利用可能なツール一覧を取得
         Returns:
@@ -102,14 +103,14 @@ async def main():
         try:
             result = "# 利用可能なツール一覧\n\n"
             result += f"**合計ツール数**: {len(global_tools)}\n\n"
-            
+
             if global_tools:
                 result += "## ツール詳細:\n"
                 for i, tool in enumerate(global_tools, 1):
                     tool_name = getattr(tool, "name", "Unknown")
                     tool_desc = getattr(tool, "description", "説明なし")
                     tool_args = getattr(tool, "args_schema", {})
-                    
+
                     result += f"{i}. **{tool_name}**\n"
                     result += f"   - 説明: {tool_desc}\n"
                     if tool_args:
@@ -117,13 +118,13 @@ async def main():
                     result += "\n"
             else:
                 result += "利用可能なツールが見つかりませんでした。\n"
-            
+
             return result
-            
+
         except Exception as e:
             return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
 
-    def sync_get_available_tools():
+    def sync_get_available_tools() -> str:
         """利用可能なツール取得の同期ラッパー"""
         try:
             # 30秒のタイムアウトを設定
@@ -134,7 +135,7 @@ async def main():
             return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
 
     # Gradio用の非同期チャット関数
-    async def gradio_chat(user_input, history, function_calling):
+    async def gradio_chat(user_input, history, function_calling) -> str:
         """
         GradioのチャットUIから呼ばれる非同期チャット関数。
         初期化済みのグローバルツールを使用する。
@@ -155,7 +156,7 @@ async def main():
         agent = create_react_agent(llm, agent_tools, debug=True)
         agent_response = await agent.ainvoke({"messages": messages})
         answer = extract_answer(agent_response)
-        
+
         # ツール履歴抽出
         tool_history = []
         if isinstance(agent_response, dict):
@@ -189,7 +190,7 @@ async def main():
             answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
         return answer
 
-    def sync_gradio_chat(user_input, history, function_calling):
+    def sync_gradio_chat(user_input, history, function_calling) -> str:
         """
         非同期gradio_chat関数を同期的に呼び出すラッパー。
         Args:
@@ -268,7 +269,7 @@ async def main():
             min-height: calc(100vh - 180px) !important;
             max-height: calc(100vh - 180px) !important;
         }
-        """
+        """,
     ) as demo:
         gr.Markdown("# LangChain MCP チャット", elem_classes=["title"])
 
@@ -285,12 +286,11 @@ async def main():
 
                 # functionCallingラジオボタン
                 with gr.Row():
-                    gr.Markdown("ツール呼び出し（Function Calling）を有効にするか選択してください：")
+                    gr.Markdown(
+                        "ツール呼び出し（Function Calling）を有効にするか選択してください："
+                    )
                     function_radio = gr.Radio(
-                        ["有効", "無効"],
-                        value="有効",
-                        label=None,
-                        container=False
+                        ["有効", "無効"], value="有効", label=None, container=False
                     )
 
                 # 入力フォーム
@@ -299,36 +299,31 @@ async def main():
                         show_label=False,
                         placeholder="メッセージを入力してください...",
                         container=False,
-                        scale=9
+                        scale=9,
                     )
-                    send_btn = gr.Button(
-                        "📤", size="sm", variant="primary", scale=1
-                    )
+                    send_btn = gr.Button("📤", size="sm", variant="primary", scale=1)
 
             with gr.TabItem("利用可能なツール"):
                 # ツール一覧表示エリア
                 tools_display = gr.Markdown(
                     "「ツール一覧を更新」ボタンをクリックして、利用可能なツールを表示してください。",
-                    height=600
+                    height=600,
                 )
-                
+
                 # ツール一覧更新ボタン
                 refresh_tools_btn = gr.Button("🔄 ツール一覧を更新", variant="primary")
-                
-                def update_tools_display():
+
+                def update_tools_display() -> str:
                     """ツール一覧を更新する関数"""
                     try:
                         tools_info = sync_get_available_tools()
                         return tools_info
                     except Exception as e:
                         return f"ツール一覧の取得中にエラーが発生しました:\n{str(e)}"
-                
-                refresh_tools_btn.click(
-                    update_tools_display,
-                    outputs=tools_display
-                )
 
-        def user_submit(user_input, history, function_calling):
+                refresh_tools_btn.click(update_tools_display, outputs=tools_display)
+
+        def user_submit(user_input, history, function_calling) -> tuple:
             """
             Gradioの送信イベントから呼ばれるコールバック関数。
             ユーザー入力・履歴・functionCalling有無を受け取り、チャット履歴を更新する。
