@@ -1,11 +1,16 @@
 {
   "servers": {
     "awslabs": {
-      "type": "sse",
-      "url": "http://localhost:8010/sse"
+      "transport": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "awslabs-aws-documentation-mcp-server",
+        "awslabs.aws-documentation-mcp-server.exe"
+      ]
     },
     "microsoft.docs.mcp": {
-      "type": "http",
+      "transport": "streamable_http",
       "url": "https://learn.microsoft.com/api/mcp"
     }
   }

@@ -11,5 +11,4 @@ dependencies = [
     "langgraph>=0.5.4",
     "mcp>=1.12.2",
     "gradio>=4.0.0",
-    "mcp-proxy>=0.8.2",
 ]

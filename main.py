@@ -5,13 +5,11 @@ import gradio as gr
 import asyncio
 import json
 from langchain_openai import ChatOpenAI
-from mcp import ClientSession
-from mcp.client.sse import sse_client
-from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
-from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 
+global_client = None
+global_tools = []
 
 async def main():
     # エージェント応答から回答テキストを抽出する関数
@@ -74,131 +72,56 @@ async def main():
     else:
         llm = ChatOpenAI(model="gpt-4.1")
 
+    # アプリ起動時にclientとtoolsを一度取得して使い回す
+    print("=== MCPクライアントとツールを初期化中... ===")
+    
+    # グローバルクライアントとツールを初期化
+    try:
+        global global_client
+        global_client = MultiServerMCPClient(params.get("servers", {}))
+        global global_tools
+        global_tools = await global_client.get_tools()
+        print(f"初期化完了: {len(global_tools)} 個のツールが利用可能です")
+        
+        # ツール一覧を表示
+        for i, tool in enumerate(global_tools, 1):
+            tool_name = getattr(tool, "name", "Unknown")
+            print(f"  {i}. {tool_name}")
+    except Exception as e:
+        print(f"初期化エラー: {e}")
+        global_client = None
+        global_tools = []
+
     # 利用可能なツール一覧を取得する関数
     async def get_available_tools():
         """
-        全サーバから利用可能なツール一覧を取得して整理する関数
+        初期化済みのグローバルツールから利用可能なツール一覧を取得
         Returns:
             str: ツール一覧の文字列
         """
-        all_tools_info = []
-        
-        for name, conf in params.get("servers", {}).items():
-            try:
-                tools = []
-                print(f"サーバー {name} に接続中... (タイプ: {conf.get('type')})")
-                
-                # 各サーバ接続に個別タイムアウトを設定
-                async def connect_to_server():
-                    if conf.get("type") == "sse":
-                        async with sse_client(conf["url"]) as (read, write):
-                            async with ClientSession(read, write) as session:
-                                await session.initialize()
-                                return await load_mcp_tools(session)
-                    elif conf.get("type") == "http":
-                        async with streamablehttp_client(conf["url"]) as (read, write):
-                            async with ClientSession(read, write) as session:
-                                await session.initialize()
-                                return await load_mcp_tools(session)
-                    elif conf.get("type") == "stdio":
-                        from mcp import StdioServerParameters
-                        server_params = StdioServerParameters(
-                            command=conf["command"], 
-                            args=conf["args"]
-                        )
-                        async with stdio_client(server_params) as (read, write):
-                            async with ClientSession(read, write) as session:
-                                await session.initialize()
-                                return await load_mcp_tools(session)
-                    return []
-                
-                # 10秒のタイムアウトで接続を試行
-                tools = await asyncio.wait_for(connect_to_server(), timeout=10.0)
-                print(f"サーバー {name} から {len(tools)} 個のツールを取得しました")
-                
-                # ツール情報を整理
-                server_tools = []
-                for tool in tools:
-                    tool_info = {
-                        "name": getattr(tool, "name", "Unknown"),
-                        "description": getattr(tool, "description", "説明なし"),
-                        "args": getattr(tool, "args_schema", {})
-                    }
-                    server_tools.append(tool_info)
-                
-                all_tools_info.append({
-                    "server": name,
-                    "type": conf.get("type", "unknown"),
-                    "url": conf.get("url", conf.get("command", "N/A")),
-                    "tools": server_tools
-                })
-                
-            except asyncio.TimeoutError:
-                error_msg = f"接続タイムアウト: サーバー {name} への接続がタイムアウトしました"
-                print(error_msg)
-                all_tools_info.append({
-                    "server": name,
-                    "type": conf.get("type", "unknown"),
-                    "url": conf.get("url", conf.get("command", "N/A")),
-                    "error": error_msg,
-                    "tools": []
-                })
-            except ConnectionError as e:
-                error_msg = f"接続エラー: {str(e)}"
-                print(f"サーバー {name}: {error_msg}")
-                all_tools_info.append({
-                    "server": name,
-                    "type": conf.get("type", "unknown"),
-                    "url": conf.get("url", conf.get("command", "N/A")),
-                    "error": error_msg,
-                    "tools": []
-                })
-            except Exception as e:
-                # ExceptionGroupや他の例外をまとめて処理
-                error_type = type(e).__name__
-                if "ExceptionGroup" in error_type or "TaskGroup" in str(e):
-                    error_msg = f"TaskGroup/ExceptionGroup エラー: サーバー接続中に内部エラーが発生しました"
-                else:
-                    error_msg = f"予期しないエラー: {error_type}: {str(e)}"
-                
-                print(f"サーバー {name}: {error_msg}")
-                all_tools_info.append({
-                    "server": name,
-                    "type": conf.get("type", "unknown"),
-                    "url": conf.get("url", conf.get("command", "N/A")),
-                    "error": error_msg,
-                    "tools": []
-                })
-        
-        # ツール一覧を文字列として整理
-        result = "# 利用可能なツール一覧\n\n"
-        total_tools = 0
-        
-        for server_info in all_tools_info:
-            result += f"## サーバー: {server_info['server']}\n"
-            result += f"- **接続タイプ**: {server_info['type']}\n"
-            result += f"- **URL/コマンド**: {server_info['url']}\n"
+        try:
+            result = "# 利用可能なツール一覧\n\n"
+            result += f"**合計ツール数**: {len(global_tools)}\n\n"
             
-            if "error" in server_info:
-                result += f"- **エラー**: {server_info['error']}\n\n"
-                continue
-            
-            result += f"- **ツール数**: {len(server_info['tools'])}\n\n"
-            total_tools += len(server_info['tools'])
-            
-            if server_info['tools']:
-                result += "### ツール詳細:\n"
-                for i, tool in enumerate(server_info['tools'], 1):
-                    result += f"{i}. **{tool['name']}**\n"
-                    result += f"   - 説明: {tool['description']}\n"
-                    if tool['args']:
-                        result += f"   - 引数: {tool['args']}\n"
+            if global_tools:
+                result += "## ツール詳細:\n"
+                for i, tool in enumerate(global_tools, 1):
+                    tool_name = getattr(tool, "name", "Unknown")
+                    tool_desc = getattr(tool, "description", "説明なし")
+                    tool_args = getattr(tool, "args_schema", {})
+                    
+                    result += f"{i}. **{tool_name}**\n"
+                    result += f"   - 説明: {tool_desc}\n"
+                    if tool_args:
+                        result += f"   - 引数: {tool_args}\n"
                     result += "\n"
             else:
-                result += "ツールが見つかりませんでした。\n\n"
-        
-        result += f"**合計ツール数**: {total_tools}\n"
-        return result
+                result += "利用可能なツールが見つかりませんでした。\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
 
     def sync_get_available_tools():
         """利用可能なツール取得の同期ラッパー"""
@@ -214,13 +137,7 @@ async def main():
     async def gradio_chat(user_input, history, function_calling):
         """
         GradioのチャットUIから呼ばれる非同期チャット関数。
-        ユーザー入力・履歴・functionCalling有無を受け取り、エージェント応答を返す。
-        Args:
-            user_input (str): ユーザーの入力テキスト
-            history (list): チャット履歴
-            function_calling (str): ツール呼び出し有効/無効
-        Returns:
-            str: エージェントの回答（ツール履歴含む場合あり）
+        初期化済みのグローバルツールを使用する。
         """
         # Gradioの履歴(messages形式)をLangChainの履歴に変換
         messages = []
@@ -230,57 +147,12 @@ async def main():
                     messages.append({"type": "human", "content": msg["content"]})
                 elif msg.get("role") == "assistant":
                     messages.append({"type": "ai", "content": msg["content"]})
-        # 今回のユーザー入力を追加
         messages.append({"type": "human", "content": user_input})
 
-        # 各サーバからツールを取得して統合
-        all_tools = []
-        for name, conf in params.get("servers", {}).items():
-            try:
-                # 各サーバ接続に個別タイムアウトを設定
-                async def connect_and_get_tools():
-                    if conf.get("type") == "sse":
-                        async with sse_client(conf["url"]) as (read, write):
-                            async with ClientSession(read, write) as session:
-                                await session.initialize()
-                                return await load_mcp_tools(session)
-                    elif conf.get("type") == "http":
-                        async with streamablehttp_client(conf["url"]) as (read, write):
-                            async with ClientSession(read, write) as session:
-                                await session.initialize()
-                                return await load_mcp_tools(session)
-                    elif conf.get("type") == "stdio":
-                        from mcp import StdioServerParameters
-                        server_params = StdioServerParameters(
-                            command=conf["command"], 
-                            args=conf["args"]
-                        )
-                        async with stdio_client(server_params) as (read, write):
-                            async with ClientSession(read, write) as session:
-                                await session.initialize()
-                                return await load_mcp_tools(session)
-                    return []
-                
-                # 5秒のタイムアウトで接続を試行（チャット時は短めに）
-                tools = await asyncio.wait_for(connect_and_get_tools(), timeout=5.0)
-                all_tools.extend(tools)
-                
-            except asyncio.TimeoutError:
-                print(f"タイムアウト: サーバー {name} への接続がタイムアウトしました")
-                continue
-            except ConnectionError as e:
-                print(f"接続エラー: サーバー {name} - {str(e)}")
-                continue
-            except Exception as e:
-                error_type = type(e).__name__
-                if "ExceptionGroup" in error_type or "TaskGroup" in str(e):
-                    print(f"TaskGroup/ExceptionGroup エラー: サーバー {name} - 内部エラーが発生しました")
-                else:
-                    print(f"サーバー {name} からツール取得中にエラー: {error_type}: {str(e)}")
-                continue
-        
-        agent_tools = all_tools if function_calling == "有効" else []
-        agent = create_react_agent(llm, agent_tools)
+        # グローバルツールを使用
+        agent_tools = global_tools if function_calling == "有効" else []
+
+        agent = create_react_agent(llm, agent_tools, debug=True)
         agent_response = await agent.ainvoke({"messages": messages})
         answer = extract_answer(agent_response)
         
@@ -480,7 +352,7 @@ async def main():
         txt.submit(user_submit, [txt, chatbot, function_radio], [txt, chatbot])
         send_btn.click(user_submit, [txt, chatbot, function_radio], [txt, chatbot])
 
-    demo.launch(share=False, server_name="0.0.0.0", server_port=7860)
+    demo.launch(share=False, server_name="127.0.0.1", server_port=7860)
 
 
 if __name__ == "__main__":
