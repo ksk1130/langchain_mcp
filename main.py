@@ -282,6 +282,10 @@ async def main() -> None:
                     height="calc(100vh - 300px)",
                     elem_classes=["chat-container"],
                     container=True,
+                    autoscroll=True,
+                    show_copy_all_button=True,
+                    show_copy_button=True,
+                    resizable=True
                 )
 
                 # functionCallingラジオボタン
@@ -300,6 +304,8 @@ async def main() -> None:
                         placeholder="メッセージを入力してください...",
                         container=False,
                         scale=9,
+                        autofocus=True,
+                        submit_btn=True
                     )
                     send_btn = gr.Button("📤", size="sm", variant="primary", scale=1)
 
