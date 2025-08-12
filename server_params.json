@@ -13,5 +13,6 @@
       "transport": "streamable_http",
       "url": "https://learn.microsoft.com/api/mcp"
     }
-  }
+  },
+  "base_url": "http://127.0.0.1:4000"
 }
