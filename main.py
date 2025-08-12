@@ -66,12 +66,39 @@ async def main() -> None:
     with open("server_params.json", encoding="utf-8") as f:
         params = json.load(f)
 
-    # LLMの初期化
-    base_url = params.get("base_url")
-    if base_url:
-        llm = ChatOpenAI(model="gpt-4.1", base_url=base_url)
-    else:
-        llm = ChatOpenAI(model="gpt-4.1")
+    # 利用可能なLLMオプションを取得
+    llm_options = params.get("llm", {})
+    available_llms = list(llm_options.keys()) if llm_options else ["Default"]
+    
+    # デフォルトのLLM名
+    default_llm = available_llms[0] if available_llms and available_llms[0] != "Default" else "Default"
+    
+    # LLMを初期化する関数
+    def initialize_llm(llm_name: str) -> ChatOpenAI:
+        """選択されたLLMに基づいてChatOpenAIインスタンスを初期化"""
+        if llm_name in llm_options:
+            llm_config = llm_options[llm_name]
+            if isinstance(llm_config, dict):
+                # 新しい形式: {"model": "...", "base_url": "..."}
+                model = llm_config.get("model", "gpt-4o")
+                base_url = llm_config.get("base_url")
+                if base_url:
+                    return ChatOpenAI(model=model, base_url=base_url)
+                else:
+                    return ChatOpenAI(model=model)
+            else:
+                # 古い形式: 文字列のbase_url
+                return ChatOpenAI(model="gpt-4o", base_url=llm_config)
+        else:
+            # デフォルトまたは不明なLLMの場合
+            base_url = params.get("base_url")
+            if base_url:
+                return ChatOpenAI(model="gpt-4o", base_url=base_url)
+            else:
+                return ChatOpenAI(model="gpt-4o")
+    
+    # 初期LLMの設定
+    llm = initialize_llm(default_llm)
 
     # アプリ起動時にclientとtoolsを一度取得して使い回す
     print("=== MCPクライアントとツールを初期化中... ===")
@@ -135,11 +162,14 @@ async def main() -> None:
             return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
 
     # Gradio用の非同期チャット関数
-    async def gradio_chat(user_input, history, function_calling) -> str:
+    async def gradio_chat(user_input, history, function_calling, selected_llm) -> str:
         """
         GradioのチャットUIから呼ばれる非同期チャット関数。
         初期化済みのグローバルツールを使用する。
         """
+        # 選択されたLLMでエージェントを初期化
+        current_llm = initialize_llm(selected_llm)
+        
         # Gradioの履歴(messages形式)をLangChainの履歴に変換
         messages = []
         if history:
@@ -153,7 +183,7 @@ async def main() -> None:
         # グローバルツールを使用
         agent_tools = global_tools if function_calling == "有効" else []
 
-        agent = create_react_agent(llm, agent_tools, debug=True)
+        agent = create_react_agent(current_llm, agent_tools, debug=True)
         agent_response = await agent.ainvoke({"messages": messages})
         answer = extract_answer(agent_response)
 
@@ -190,17 +220,18 @@ async def main() -> None:
             answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
         return answer
 
-    def sync_gradio_chat(user_input, history, function_calling) -> str:
+    def sync_gradio_chat(user_input, history, function_calling, selected_llm) -> str:
         """
         非同期gradio_chat関数を同期的に呼び出すラッパー。
         Args:
             user_input (str): ユーザーの入力テキスト
             history (list): チャット履歴
             function_calling (str): ツール呼び出し有効/無効
+            selected_llm (str): 選択されたLLM名
         Returns:
             str: エージェントの回答
         """
-        return asyncio.run(gradio_chat(user_input, history, function_calling))
+        return asyncio.run(gradio_chat(user_input, history, function_calling, selected_llm))
 
     with gr.Blocks(
         theme=gr.themes.Soft(),
@@ -219,10 +250,18 @@ async def main() -> None:
         }
         .chat-container {
             flex: 1 !important;
-            height: calc(100vh - 220px) !important;
-            min-height: calc(100vh - 220px) !important;
-            max-height: calc(100vh - 220px) !important;
+            height: calc(100vh - 350px) !important;
+            min-height: calc(100vh - 350px) !important;
+            max-height: calc(100vh - 350px) !important;
             overflow: auto !important;
+        }
+        .controls-container {
+            flex-shrink: 0 !important;
+            padding: 15px !important;
+            background: #f8f9fa !important;
+            border-top: 1px solid #ddd !important;
+            border-bottom: 1px solid #ddd !important;
+            min-height: 80px !important;
         }
         .input-container {
             flex-shrink: 0 !important;
@@ -265,10 +304,15 @@ async def main() -> None:
         */
         /* チャットボットの高さを固定 */
         .chatbot {
-            height: calc(100vh - 180px) !important;
-            min-height: calc(100vh - 180px) !important;
-            max-height: calc(100vh - 180px) !important;
+            height: calc(100vh - 250px) !important;
+            min-height: calc(100vh - 250px) !important;
+            max-height: calc(100vh - 250px) !important;
         }
+        /* プルダウンとラジオボタンの表示を確保
+        .dropdown, .radio {
+            min-height: 40px !important;
+            z-index: 1000 !important;
+        }*/
         """,
     ) as demo:
         gr.Markdown("# LangChain MCP チャット", elem_classes=["title"])
@@ -279,7 +323,7 @@ async def main() -> None:
                 # チャットボット（画面いっぱいに表示）
                 chatbot = gr.Chatbot(
                     type="messages",
-                    height="calc(100vh - 300px)",
+                    height="calc(100vh - 250px)",
                     elem_classes=["chat-container"],
                     container=True,
                     autoscroll=True,
@@ -288,17 +332,29 @@ async def main() -> None:
                     resizable=True
                 )
 
-                # functionCallingラジオボタン
-                with gr.Row():
-                    gr.Markdown(
-                        "ツール呼び出し（Function Calling）を有効にするか選択してください："
-                    )
-                    function_radio = gr.Radio(
-                        ["有効", "無効"], value="有効", label=None, container=False
-                    )
+                # functionCallingラジオボタンとLLM選択プルダウン
+                with gr.Row(elem_classes=["controls-container"]):
+                    with gr.Column(scale=1):
+                        gr.Markdown("**ツール呼び出し（Function Calling）:**")
+                        function_radio = gr.Radio(
+                            ["有効", "無効"], 
+                            value="有効", 
+                            label=None, 
+                            container=False,
+                            elem_classes=["radio"]
+                        )
+                    with gr.Column(scale=1):
+                        gr.Markdown("**使用するLLM:**")
+                        llm_dropdown = gr.Dropdown(
+                            choices=available_llms,
+                            value=default_llm,
+                            label=None,
+                            container=False,
+                            elem_classes=["dropdown"]
+                        )
 
                 # 入力フォーム
-                with gr.Row():
+                with gr.Row(elem_classes=["input-container"]):
                     txt = gr.Textbox(
                         show_label=False,
                         placeholder="メッセージを入力してください...",
@@ -329,20 +385,21 @@ async def main() -> None:
 
                 refresh_tools_btn.click(update_tools_display, outputs=tools_display)
 
-        def user_submit(user_input, history, function_calling) -> tuple:
+        def user_submit(user_input, history, function_calling, selected_llm) -> tuple:
             """
             Gradioの送信イベントから呼ばれるコールバック関数。
-            ユーザー入力・履歴・functionCalling有無を受け取り、チャット履歴を更新する。
+            ユーザー入力・履歴・functionCalling有無・選択されたLLMを受け取り、チャット履歴を更新する。
             Args:
                 user_input (str): ユーザーの入力テキスト
                 history (list): チャット履歴
                 function_calling (str): ツール呼び出し有効/無効
+                selected_llm (str): 選択されたLLM名
             Returns:
                 tuple: (空文字, 更新後履歴)
             """
             if not user_input.strip():
                 return "", history
-            response = sync_gradio_chat(user_input, history, function_calling)
+            response = sync_gradio_chat(user_input, history, function_calling, selected_llm)
             # messages形式に変換
             new_history = history + [
                 {"role": "user", "content": user_input},
@@ -350,8 +407,8 @@ async def main() -> None:
             ]
             return "", new_history
 
-        txt.submit(user_submit, [txt, chatbot, function_radio], [txt, chatbot])
-        send_btn.click(user_submit, [txt, chatbot, function_radio], [txt, chatbot])
+        txt.submit(user_submit, [txt, chatbot, function_radio, llm_dropdown], [txt, chatbot])
+        send_btn.click(user_submit, [txt, chatbot, function_radio, llm_dropdown], [txt, chatbot])
 
     demo.launch(share=False, server_name="127.0.0.1", server_port=7860)
 
