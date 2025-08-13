@@ -1,102 +1,55 @@
-# Create server parameters for stdio connection
-
 import os
 import gradio as gr
 import asyncio
-import json
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
+from langchain_mcp_utils import (
+    extract_answer,
+    load_server_params,
+    initialize_llm,
+    get_llm_params,
+    sync_get_available_tools,
+    extract_tool_history,
+)
 
 global_client = None
 global_tools = []
 
 
 async def main() -> None:
-    # エージェント応答から回答テキストを抽出する関数
-    def extract_answer(resp) -> str:
-        """
-        エージェント応答から回答テキストのみを抽出する関数。
-        dict, list, オブジェクト型に対応し、AIMessageのcontentや代表的な回答キーを優先して返す。
-        Args:
-            resp: エージェントから返された応答オブジェクト
-        Returns:
-            str: 回答テキスト
-        """
-        if isinstance(resp, dict):
-            if "messages" in resp:
-                messages = resp["messages"]
-                if isinstance(messages, list):
-                    for msg in reversed(messages):
-                        if (
-                            hasattr(msg, "content")
-                            and hasattr(msg, "__class__")
-                            and "AIMessage" in str(type(msg))
-                        ):
-                            return msg.content
-                        elif isinstance(msg, dict) and msg.get("type") == "ai":
-                            return msg.get("content", "")
-            for key in ["output", "answer", "content", "result", "text"]:
-                if key in resp:
-                    return extract_answer(resp[key])
-            if resp.get("type") == "ai":
-                return resp.get("content", "")
-            return str(resp)
-        elif isinstance(resp, list):
-            for item in reversed(resp):
-                if (
-                    hasattr(item, "content")
-                    and hasattr(item, "__class__")
-                    and "AIMessage" in str(type(item))
-                ):
-                    return item.content
-                elif isinstance(item, dict) and item.get("type") == "ai":
-                    return item.get("content", "")
-            answers = [extract_answer(item) for item in resp]
-            return "\n---\n".join(str(a) for a in answers if a)
-        else:
-            if hasattr(resp, "content"):
-                return resp.content
-            try:
-                return str(resp)
-            except Exception:
-                return f"<{type(resp).__name__}>"
-
     # server_params.jsonからサーバー設定を読み込み
-    with open("server_params.json", encoding="utf-8") as f:
-        params = json.load(f)
+    params = load_server_params("server_params.json")
 
-    # 利用可能なLLMオプションを取得
-    llm_options = params.get("llm", {})
-    available_llms = list(llm_options.keys()) if llm_options else ["Default"]
+    # paramsが空の辞書の場合(＝設定ファイルが存在しない場合)、エラーで終了
+    if not params:
+        print("設定ファイル(server_params.json)が見つからないか、無効です。")
+        return
+
+    # paramsから必要な情報を取得
+    _, _, llm_options, _, available_llms = get_llm_params(params)
 
     # 2つのLLMを取得（最初の2つ、または同じものを2回）
     llm1_name = available_llms[0] if len(available_llms) >= 1 else "Default"
     llm2_name = available_llms[1] if len(available_llms) >= 2 else available_llms[0]
 
-    # LLMを初期化する関数
-    def initialize_llm(llm_name: str) -> ChatOpenAI:
-        """選択されたLLMに基づいてChatOpenAIインスタンスを初期化"""
+    # LLMを初期化する関数（ローカル版）
+    def initialize_llm_local(llm_name: str) -> ChatOpenAI:
+        """選択されたLLMに基づいてChatOpenAIインスタンスを初期化（main_dual専用）"""
         if llm_name in llm_options:
             llm_config = llm_options[llm_name]
             if isinstance(llm_config, dict):
                 # 新しい形式: {"model": "...", "base_url": "..."}
                 model = llm_config.get("model", "gpt-4o")
-                base_url = llm_config.get("base_url")
-                if base_url:
-                    return ChatOpenAI(model=model, base_url=base_url)
-                else:
-                    return ChatOpenAI(model=model)
+                base_url = llm_config.get("base_url", "")
+                return initialize_llm(model, base_url)
             else:
                 # 古い形式: 文字列のbase_url
-                return ChatOpenAI(model="gpt-4o", base_url=llm_config)
+                return initialize_llm("gpt-4o", llm_config)
         else:
             # デフォルトまたは不明なLLMの場合
-            base_url = params.get("base_url")
-            if base_url:
-                return ChatOpenAI(model="gpt-4o", base_url=base_url)
-            else:
-                return ChatOpenAI(model="gpt-4o")
+            base_url = params.get("base_url", "")
+            return initialize_llm("gpt-4o", base_url)
 
     # アプリ起動時にclientとtoolsを一度取得して使い回す
     print("=== MCPクライアントとツールを初期化中... ===")
@@ -114,9 +67,9 @@ async def main() -> None:
             tool_name = getattr(tool, "name", "Unknown")
             print(f"  {i}. {tool_name}")
     except Exception as e:
-        print(f"初期化エラー: {e}")
-        global_client = None
-        global_tools = []
+        print(f"ツール取得エラー: {e}")
+        print("プロセスを終了します...")
+        os._exit(1)  # 即座にプロセスを強制終了
 
     # 単一LLM用の非同期チャット関数
     async def single_llm_chat(user_input, history, function_calling, llm_name) -> str:
@@ -125,7 +78,7 @@ async def main() -> None:
         """
         try:
             # 選択されたLLMでエージェントを初期化
-            current_llm = initialize_llm(llm_name)
+            current_llm = initialize_llm_local(llm_name)
 
             # Gradioの履歴(messages形式)をLangChainの履歴に変換
             messages = []
@@ -144,28 +97,8 @@ async def main() -> None:
             agent_response = await agent.ainvoke({"messages": messages})
             answer = extract_answer(agent_response)
 
-            # ツール履歴抽出
-            tool_history = []
-            if isinstance(agent_response, dict):
-                if "messages" in agent_response:
-                    messages_resp = agent_response["messages"]
-                    if isinstance(messages_resp, list):
-                        for msg in messages_resp:
-                            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                for tool_call in msg.tool_calls:
-                                    tool_name = (
-                                        tool_call.get("name")
-                                        if isinstance(tool_call, dict)
-                                        else getattr(tool_call, "name", str(tool_call))
-                                    )
-                                    tool_args = (
-                                        tool_call.get("args")
-                                        if isinstance(tool_call, dict)
-                                        else getattr(tool_call, "args", {})
-                                    )
-                                    tool_history.append(
-                                        f"ツール名: {tool_name}, 引数: {tool_args}"
-                                    )
+            # ツール履歴抽出（langchain_mcp_utils.pyの関数を使用）
+            tool_history = extract_tool_history(agent_response)
             if tool_history:
                 answer += f"\n\n[{llm_name} - 呼び出されたツール履歴]\n" + "\n".join(
                     tool_history
@@ -222,43 +155,10 @@ async def main() -> None:
             dual_llm_chat(user_input, history1, history2, function_calling)
         )
 
-    # 利用可能なツール一覧を取得する関数
-    async def get_available_tools() -> str:
-        """
-        初期化済みのグローバルツールから利用可能なツール一覧を取得
-        """
-        try:
-            result = "# 利用可能なツール一覧\n\n"
-            result += f"**合計ツール数**: {len(global_tools)}\n\n"
-
-            if global_tools:
-                result += "## ツール詳細:\n"
-                for i, tool in enumerate(global_tools, 1):
-                    tool_name = getattr(tool, "name", "Unknown")
-                    tool_desc = getattr(tool, "description", "説明なし")
-                    tool_args = getattr(tool, "args_schema", {})
-
-                    result += f"{i}. **{tool_name}**\n"
-                    result += f"   - 説明: {tool_desc}\n"
-                    if tool_args:
-                        result += f"   - 引数: {tool_args}\n"
-                    result += "\n"
-            else:
-                result += "利用可能なツールが見つかりませんでした。\n"
-
-            return result
-
-        except Exception as e:
-            return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
-
-    def sync_get_available_tools() -> str:
-        """利用可能なツール取得の同期ラッパー"""
-        try:
-            return asyncio.run(asyncio.wait_for(get_available_tools(), timeout=30.0))
-        except asyncio.TimeoutError:
-            return "ツール一覧の取得がタイムアウトしました。サーバーの接続を確認してください。"
-        except Exception as e:
-            return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
+    # 利用可能なツール一覧を取得する関数（ローカル版）
+    def sync_get_available_tools_local() -> str:
+        """利用可能なツール取得の同期ラッパー（main_dual専用）"""
+        return sync_get_available_tools(global_tools)
 
     # Gradio UIの構築
     with gr.Blocks(
@@ -375,7 +275,7 @@ async def main() -> None:
                 def update_tools_display() -> str:
                     """ツール一覧を更新する関数"""
                     try:
-                        tools_info = sync_get_available_tools()
+                        tools_info = sync_get_available_tools_local()
                         return tools_info
                     except Exception as e:
                         return f"ツール一覧の取得中にエラーが発生しました:\n{str(e)}"

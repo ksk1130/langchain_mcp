@@ -1,104 +1,100 @@
-# Create server parameters for stdio connection
-
 import os
 import gradio as gr
 import asyncio
-import json
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 
+from langchain_mcp_utils import (
+    extract_answer,
+    get_llm_params,
+    initialize_llm,
+    load_server_params,
+    sync_get_available_tools,
+    extract_tool_history,
+)
+
 global_client = None
 global_tools = []
+llm_options = {}
+
+
+# Gradio用の非同期チャット関数
+async def gradio_chat(user_input, history, function_calling, selected_llm) -> str:
+    """
+    GradioのチャットUIから呼ばれる非同期チャット関数。
+    Args:
+        user_input (str): ユーザーの入力テキスト
+        history (list): チャット履歴
+        function_calling (str): ツール呼び出し有効/無効
+        selected_llm (str): 選択されたLLM名
+    Returns:
+        str: チャット応答
+    """
+    # 選択されたLLMでエージェントを初期化
+    print("selected_llm:", selected_llm)
+    # llm_optionsから、selected_llmに対応する設定を取得
+    llm_config = llm_options.get(selected_llm, {})
+    model_name = llm_config.get("model", "gpt-4o")
+    current_llm = initialize_llm(model_name)
+    # Gradioの履歴(messages形式)をLangChainの履歴に変換
+    messages = []
+    if history:
+        for msg in history:
+            if msg.get("role") == "user":
+                messages.append({"type": "human", "content": msg["content"]})
+            elif msg.get("role") == "assistant":
+                messages.append({"type": "ai", "content": msg["content"]})
+    messages.append({"type": "human", "content": user_input})
+    # グローバルツールを使用
+    agent_tools = global_tools if function_calling == "有効" else []
+    agent = create_react_agent(current_llm, agent_tools, debug=True)
+    agent_response = await agent.ainvoke({"messages": messages})
+    answer = extract_answer(agent_response)
+    # ツール履歴抽出
+    tool_history = extract_tool_history(agent_response)
+    if tool_history:
+        answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
+    return answer
+
+
+def sync_gradio_chat(user_input, history, function_calling, selected_llm) -> str:
+    """
+    非同期gradio_chat関数を同期的に呼び出すラッパー。
+    Args:
+        user_input (str): ユーザーの入力テキスト
+        history (list): チャット履歴
+        function_calling (str): ツール呼び出し有効/無効
+        selected_llm (str): 選択されたLLM名
+    Returns:
+        str: エージェントの回答
+    """
+
+    return asyncio.run(gradio_chat(user_input, history, function_calling, selected_llm))
 
 
 async def main() -> None:
-    # エージェント応答から回答テキストを抽出する関数
-    def extract_answer(resp) -> str:
-        """
-        エージェント応答から回答テキストのみを抽出する関数。
-        dict, list, オブジェクト型に対応し、AIMessageのcontentや代表的な回答キーを優先して返す。
-        Args:
-            resp: エージェントから返された応答オブジェクト
-        Returns:
-            str: 回答テキスト
-        """
-        if isinstance(resp, dict):
-            if "messages" in resp:
-                messages = resp["messages"]
-                if isinstance(messages, list):
-                    for msg in reversed(messages):
-                        if (
-                            hasattr(msg, "content")
-                            and hasattr(msg, "__class__")
-                            and "AIMessage" in str(type(msg))
-                        ):
-                            return msg.content
-                        elif isinstance(msg, dict) and msg.get("type") == "ai":
-                            return msg.get("content", "")
-            for key in ["output", "answer", "content", "result", "text"]:
-                if key in resp:
-                    return extract_answer(resp[key])
-            if resp.get("type") == "ai":
-                return resp.get("content", "")
-            return str(resp)
-        elif isinstance(resp, list):
-            for item in reversed(resp):
-                if (
-                    hasattr(item, "content")
-                    and hasattr(item, "__class__")
-                    and "AIMessage" in str(type(item))
-                ):
-                    return item.content
-                elif isinstance(item, dict) and item.get("type") == "ai":
-                    return item.get("content", "")
-            answers = [extract_answer(item) for item in resp]
-            return "\n---\n".join(str(a) for a in answers if a)
-        else:
-            if hasattr(resp, "content"):
-                return resp.content
-            try:
-                return str(resp)
-            except Exception:
-                return f"<{type(resp).__name__}>"
+    """
+    メイン関数。Gradioアプリケーションを起動し、LLMとツールを初期化する。
+    """
 
-    # server_params.jsonからサーバー設定を読み込み
-    with open("server_params.json", encoding="utf-8") as f:
-        params = json.load(f)
+    # 設定ファイルからサーバーパラメータを読み込む
+    params_file_name = "server_params.json"
+    params = load_server_params(params_file_name)
 
-    # 利用可能なLLMオプションを取得
-    llm_options = params.get("llm", {})
-    available_llms = list(llm_options.keys()) if llm_options else ["Default"]
-    
-    # デフォルトのLLM名
-    default_llm = available_llms[0] if available_llms and available_llms[0] != "Default" else "Default"
-    
-    # LLMを初期化する関数
-    def initialize_llm(llm_name: str) -> ChatOpenAI:
-        """選択されたLLMに基づいてChatOpenAIインスタンスを初期化"""
-        if llm_name in llm_options:
-            llm_config = llm_options[llm_name]
-            if isinstance(llm_config, dict):
-                # 新しい形式: {"model": "...", "base_url": "..."}
-                model = llm_config.get("model", "gpt-4o")
-                base_url = llm_config.get("base_url")
-                if base_url:
-                    return ChatOpenAI(model=model, base_url=base_url)
-                else:
-                    return ChatOpenAI(model=model)
-            else:
-                # 古い形式: 文字列のbase_url
-                return ChatOpenAI(model="gpt-4o", base_url=llm_config)
-        else:
-            # デフォルトまたは不明なLLMの場合
-            base_url = params.get("base_url")
-            if base_url:
-                return ChatOpenAI(model="gpt-4o", base_url=base_url)
-            else:
-                return ChatOpenAI(model="gpt-4o")
-    
+    # paramsが空の辞書の場合(＝設定ファイルが存在しない場合)、エラーで終了
+    if not params:
+        print("設定ファイル({})が見つからないか、無効です。".format(params_file_name))
+        return
+
+    # paramsから必要な情報を取得
+    global llm_options
+    model_name, base_url, llm_options, default_llm, available_llms = get_llm_params(
+        params
+    )
+
     # 初期LLMの設定
-    llm = initialize_llm(default_llm)
+    llm = initialize_llm(llm_name=model_name, base_url=base_url)
 
     # アプリ起動時にclientとtoolsを一度取得して使い回す
     print("=== MCPクライアントとツールを初期化中... ===")
@@ -116,122 +112,9 @@ async def main() -> None:
             tool_name = getattr(tool, "name", "Unknown")
             print(f"  {i}. {tool_name}")
     except Exception as e:
-        print(f"初期化エラー: {e}")
-        global_client = None
-        global_tools = []
-
-    # 利用可能なツール一覧を取得する関数
-    async def get_available_tools() -> str:
-        """
-        初期化済みのグローバルツールから利用可能なツール一覧を取得
-        Returns:
-            str: ツール一覧の文字列
-        """
-        try:
-            result = "# 利用可能なツール一覧\n\n"
-            result += f"**合計ツール数**: {len(global_tools)}\n\n"
-
-            if global_tools:
-                result += "## ツール詳細:\n"
-                for i, tool in enumerate(global_tools, 1):
-                    tool_name = getattr(tool, "name", "Unknown")
-                    tool_desc = getattr(tool, "description", "説明なし")
-                    tool_args = getattr(tool, "args_schema", {})
-
-                    result += f"{i}. **{tool_name}**\n"
-                    result += f"   - 説明: {tool_desc}\n"
-                    if tool_args:
-                        result += f"   - 引数: {tool_args}\n"
-                    result += "\n"
-            else:
-                result += "利用可能なツールが見つかりませんでした。\n"
-
-            return result
-
-        except Exception as e:
-            return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
-
-    def sync_get_available_tools() -> str:
-        """利用可能なツール取得の同期ラッパー"""
-        try:
-            # 30秒のタイムアウトを設定
-            return asyncio.run(asyncio.wait_for(get_available_tools(), timeout=30.0))
-        except asyncio.TimeoutError:
-            return "ツール一覧の取得がタイムアウトしました。サーバーの接続を確認してください。"
-        except Exception as e:
-            return f"ツール一覧の取得中にエラーが発生しました: {type(e).__name__}: {str(e)}"
-
-    # Gradio用の非同期チャット関数
-    async def gradio_chat(user_input, history, function_calling, selected_llm) -> str:
-        """
-        GradioのチャットUIから呼ばれる非同期チャット関数。
-        初期化済みのグローバルツールを使用する。
-        """
-        # 選択されたLLMでエージェントを初期化
-        current_llm = initialize_llm(selected_llm)
-        
-        # Gradioの履歴(messages形式)をLangChainの履歴に変換
-        messages = []
-        if history:
-            for msg in history:
-                if msg.get("role") == "user":
-                    messages.append({"type": "human", "content": msg["content"]})
-                elif msg.get("role") == "assistant":
-                    messages.append({"type": "ai", "content": msg["content"]})
-        messages.append({"type": "human", "content": user_input})
-
-        # グローバルツールを使用
-        agent_tools = global_tools if function_calling == "有効" else []
-
-        agent = create_react_agent(current_llm, agent_tools, debug=True)
-        agent_response = await agent.ainvoke({"messages": messages})
-        answer = extract_answer(agent_response)
-
-        # ツール履歴抽出
-        tool_history = []
-        if isinstance(agent_response, dict):
-            if "messages" in agent_response:
-                messages_resp = agent_response["messages"]
-                if isinstance(messages_resp, list):
-                    for msg in messages_resp:
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            for tool_call in msg.tool_calls:
-                                tool_name = (
-                                    tool_call.get("name")
-                                    if isinstance(tool_call, dict)
-                                    else getattr(tool_call, "name", str(tool_call))
-                                )
-                                tool_args = (
-                                    tool_call.get("args")
-                                    if isinstance(tool_call, dict)
-                                    else getattr(tool_call, "args", {})
-                                )
-                                tool_history.append(
-                                    f"ツール名: {tool_name}, 引数: {tool_args}"
-                                )
-            if "tool_calls" in agent_response:
-                calls = agent_response["tool_calls"]
-                if calls:
-                    for call in calls:
-                        tool_history.append(
-                            f"ツール名: {call.get('tool_name', call.get('name', 'Unknown'))}, 入力: {call.get('input', call.get('args', {}))}"
-                        )
-        if tool_history:
-            answer += "\n\n[呼び出されたツール履歴]\n" + "\n".join(tool_history)
-        return answer
-
-    def sync_gradio_chat(user_input, history, function_calling, selected_llm) -> str:
-        """
-        非同期gradio_chat関数を同期的に呼び出すラッパー。
-        Args:
-            user_input (str): ユーザーの入力テキスト
-            history (list): チャット履歴
-            function_calling (str): ツール呼び出し有効/無効
-            selected_llm (str): 選択されたLLM名
-        Returns:
-            str: エージェントの回答
-        """
-        return asyncio.run(gradio_chat(user_input, history, function_calling, selected_llm))
+        print(f"ツール取得エラー: {e}")
+        print("プロセスを終了します...")
+        os._exit(1)  # 即座にプロセスを強制終了
 
     with gr.Blocks(
         theme=gr.themes.Soft(),
@@ -329,7 +212,7 @@ async def main() -> None:
                     autoscroll=True,
                     show_copy_all_button=True,
                     show_copy_button=True,
-                    resizable=True
+                    resizable=True,
                 )
 
                 # functionCallingラジオボタンとLLM選択プルダウン
@@ -337,11 +220,11 @@ async def main() -> None:
                     with gr.Column(scale=1):
                         gr.Markdown("**ツール呼び出し（Function Calling）:**")
                         function_radio = gr.Radio(
-                            ["有効", "無効"], 
-                            value="有効", 
-                            label=None, 
+                            ["有効", "無効"],
+                            value="有効",
+                            label=None,
                             container=False,
-                            elem_classes=["radio"]
+                            elem_classes=["radio"],
                         )
                     with gr.Column(scale=1):
                         gr.Markdown("**使用するLLM:**")
@@ -350,7 +233,7 @@ async def main() -> None:
                             value=default_llm,
                             label=None,
                             container=False,
-                            elem_classes=["dropdown"]
+                            elem_classes=["dropdown"],
                         )
 
                 # 入力フォーム
@@ -361,7 +244,7 @@ async def main() -> None:
                         container=False,
                         scale=9,
                         autofocus=True,
-                        submit_btn=True
+                        submit_btn=True,
                     )
                     send_btn = gr.Button("📤", size="sm", variant="primary", scale=1)
 
@@ -378,7 +261,7 @@ async def main() -> None:
                 def update_tools_display() -> str:
                     """ツール一覧を更新する関数"""
                     try:
-                        tools_info = sync_get_available_tools()
+                        tools_info = sync_get_available_tools(global_tools)
                         return tools_info
                     except Exception as e:
                         return f"ツール一覧の取得中にエラーが発生しました:\n{str(e)}"
@@ -399,7 +282,9 @@ async def main() -> None:
             """
             if not user_input.strip():
                 return "", history
-            response = sync_gradio_chat(user_input, history, function_calling, selected_llm)
+            response = sync_gradio_chat(
+                user_input, history, function_calling, selected_llm
+            )
             # messages形式に変換
             new_history = history + [
                 {"role": "user", "content": user_input},
@@ -407,8 +292,12 @@ async def main() -> None:
             ]
             return "", new_history
 
-        txt.submit(user_submit, [txt, chatbot, function_radio, llm_dropdown], [txt, chatbot])
-        send_btn.click(user_submit, [txt, chatbot, function_radio, llm_dropdown], [txt, chatbot])
+        txt.submit(
+            user_submit, [txt, chatbot, function_radio, llm_dropdown], [txt, chatbot]
+        )
+        send_btn.click(
+            user_submit, [txt, chatbot, function_radio, llm_dropdown], [txt, chatbot]
+        )
 
     demo.launch(share=False, server_name="127.0.0.1", server_port=7860)
 
