@@ -36,7 +36,10 @@ async def gradio_chat(user_input, history, function_calling, selected_llm) -> st
     # llm_optionsから、selected_llmに対応する設定を取得
     llm_config = llm_options.get(selected_llm, {})
     model_name = llm_config.get("model", "gpt-4o")
-    current_llm = initialize_llm(model_name)
+    base_url = llm_config.get("base_url", "")
+    print("model_name:", model_name)
+
+    current_llm = initialize_llm(model_name, base_url)
     # Gradioの履歴(messages形式)をLangChainの履歴に変換
     messages = []
     if history:

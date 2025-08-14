@@ -83,7 +83,7 @@ def load_server_params(path: str) -> dict:
 
 
 # LLMを初期化する関数
-def initialize_llm(llm_name: str = "gpt-4o", base_url: str = "") -> ChatOpenAI:
+def initialize_llm(llm_name: str, base_url: str) -> ChatOpenAI:
     """
     LLMを初期化する関数
     Args:
@@ -92,11 +92,7 @@ def initialize_llm(llm_name: str = "gpt-4o", base_url: str = "") -> ChatOpenAI:
     Returns:
         ChatOpenAI: 初期化されたChatOpenAIインスタンス
     """
-    if base_url != "":
-        return ChatOpenAI(model=llm_name, base_url=base_url)
-    else:
-        return ChatOpenAI(model=llm_name)
-
+    return ChatOpenAI(model=llm_name, base_url=base_url)
 
 def get_llm_params(params: dict) -> tuple:
     """
@@ -202,8 +198,12 @@ def extract_tool_history(agent_response) -> list:
                             if isinstance(tool_call, dict):
                                 # LangChainのAIMessage.tool_calls形式
                                 if "function" in tool_call:
-                                    tool_name = tool_call["function"].get("name", "Unknown")
-                                    tool_args = tool_call["function"].get("arguments", "{}")
+                                    tool_name = tool_call["function"].get(
+                                        "name", "Unknown"
+                                    )
+                                    tool_args = tool_call["function"].get(
+                                        "arguments", "{}"
+                                    )
                                 else:
                                     tool_name = tool_call.get("name", "Unknown")
                                     tool_args = tool_call.get("args", {})

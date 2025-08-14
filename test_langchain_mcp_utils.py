@@ -85,21 +85,27 @@ def test_get_llm_params():
 
 def test_initialize_llm():
     """
-    initialize_llmが正しいChatOpenAIインスタンスを返すかをテスト。
+    initialize_llm関数が正しくChatOpenAIインスタンスを作成するかをテスト。
     """
-    # base_urlあり
-    llm = langchain_mcp_utils.initialize_llm(
-        llm_name="gpt-4.1", base_url="http://127.0.0.1:4000"
-    )
-    assert hasattr(llm, "model_name")
-    assert hasattr(llm, "openai_api_base")
-    assert llm.model_name == "gpt-4.1"
-    assert llm.openai_api_base == "http://127.0.0.1:4000"
-    # base_urlなし
-    llm2 = langchain_mcp_utils.initialize_llm(llm_name="gpt-4.1")
-    assert hasattr(llm2, "model_name")
-    assert llm2.model_name == "gpt-4.1"
+    # base_urlを指定しない場合
+    llm = langchain_mcp_utils.initialize_llm("gpt-4o", "")
+    assert llm.model_name == "gpt-4o"
+    assert llm.openai_api_base is None
+    
+    # base_urlを指定する場合
+    llm = langchain_mcp_utils.initialize_llm("gpt-3.5-turbo", "http://localhost:8000")
+    assert llm.model_name == "gpt-3.5-turbo"
+    assert llm.openai_api_base == "http://localhost:8000"
 
+
+def test_load_server_params_file_not_found(tmp_path, monkeypatch):
+    """
+    server_params.jsonが存在しない場合に空の辞書が返されることをテスト。
+    """
+    # 一時ディレクトリに移動してserver_params.jsonが存在しないことを確保
+    monkeypatch.chdir(tmp_path)
+    result = langchain_mcp_utils.load_server_params("server_params.json")
+    assert result == {}
 
 def test_get_available_tools():
     """
