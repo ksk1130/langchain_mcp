@@ -19,20 +19,16 @@ LangChainとModel Context Protocol (MCP)を使用したチャットアプリケ�
 ## 🔧 インストール
 
 ### 1. uvの導入
+uvはPythonのパッケージマネージャーで、依存関係の管理と実行を簡素化します。
 
-#### Windows (PowerShell)
-```powershell
-# uvをインストール
-iwr https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip -OutFile uv.zip
-Expand-Archive uv.zip -DestinationPath .
-Move-Item uv.exe $env:USERPROFILE\.local\bin\
-```
+**uvの利点:**
+- 🔒 **分離された環境**: プロジェクトごとに独立した仮想環境を作成し、他のPythonインストールやプロジェクトに影響を与えません
+- ⚡ **高速**: Rustで書かれており、pipよりも大幅に高速な依存関係解決とインストール
+- 🎯 **プロジェクト管理**: `pyproject.toml`ベースの現代的なプロジェクト管理
+- 🛡️ **システム保護**: システムPythonやグローバルパッケージを変更せず、クリーンな開発環境を維持
 
-#### macOS/Linux
-```bash
-# uvをインストール
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+以下の手順でインストールしてください。
+- [uvのインストール手順(公式)](https://docs.astral.sh/uv/#installation)
 
 ### 2. プロジェクトのクローンと依存関係のインストール
 
@@ -41,6 +37,8 @@ git clone <リポジトリURL>
 cd langchain_mcp
 uv sync
 ```
+
+> 💡 **注意**: `uv sync`により、このプロジェクト専用の仮想環境が自動作成されます。システムPython環境や他のプロジェクトの依存関係には一切影響しません。
 
 ## ⚙️ 設定
 
