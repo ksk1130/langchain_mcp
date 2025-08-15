@@ -20,7 +20,9 @@ llm_options = {}
 
 
 # Gradio用の非同期チャット関数
-async def gradio_chat(user_input, history, function_calling, selected_llm) -> str:
+async def gradio_chat(
+    user_input, history, function_calling, selected_llm, system_prompt=""
+) -> str:
     """
     GradioのチャットUIから呼ばれる非同期チャット関数。
     Args:
@@ -28,6 +30,7 @@ async def gradio_chat(user_input, history, function_calling, selected_llm) -> st
         history (list): チャット履歴
         function_calling (str): ツール呼び出し有効/無効
         selected_llm (str): 選択されたLLM名
+        system_prompt (str): システムプロンプト
     Returns:
         str: チャット応答
     """
@@ -42,6 +45,11 @@ async def gradio_chat(user_input, history, function_calling, selected_llm) -> st
     current_llm = initialize_llm(model_name, base_url)
     # Gradioの履歴(messages形式)をLangChainの履歴に変換
     messages = []
+
+    # システムプロンプトがある場合、最初に追加
+    if system_prompt.strip():
+        messages.append({"type": "system", "content": system_prompt.strip()})
+
     if history:
         for msg in history:
             if msg.get("role") == "user":
@@ -61,7 +69,9 @@ async def gradio_chat(user_input, history, function_calling, selected_llm) -> st
     return answer
 
 
-def sync_gradio_chat(user_input, history, function_calling, selected_llm) -> str:
+def sync_gradio_chat(
+    user_input, history, function_calling, selected_llm, system_prompt=""
+) -> str:
     """
     非同期gradio_chat関数を同期的に呼び出すラッパー。
     Args:
@@ -69,11 +79,14 @@ def sync_gradio_chat(user_input, history, function_calling, selected_llm) -> str
         history (list): チャット履歴
         function_calling (str): ツール呼び出し有効/無効
         selected_llm (str): 選択されたLLM名
+        system_prompt (str): システムプロンプト
     Returns:
         str: エージェントの回答
     """
 
-    return asyncio.run(gradio_chat(user_input, history, function_calling, selected_llm))
+    return asyncio.run(
+        gradio_chat(user_input, history, function_calling, selected_llm, system_prompt)
+    )
 
 
 async def main() -> None:
@@ -285,8 +298,17 @@ async def main() -> None:
             """
             if not user_input.strip():
                 return "", history
+            # 内部でシステムプロンプトを設定
+            system_prompt = """
+            あなたは親切で知識豊富なAIアシスタントです。ユーザーの質問に対して、正確で分かりやすい回答を提供してください。
+            なお、回答にあたり、以下のルールを守ってください。
+            1. 回答は日本語で行ってください。
+            2. 回答は簡潔で明確にしてください。
+            3. ツール呼び出しが有効な場合は、ツールを利用してください。
+            4. ユーザーの意図を理解しかねる場合は、追加の情報を求めてください。
+            """
             response = sync_gradio_chat(
-                user_input, history, function_calling, selected_llm
+                user_input, history, function_calling, selected_llm, system_prompt
             )
             # messages形式に変換
             new_history = history + [

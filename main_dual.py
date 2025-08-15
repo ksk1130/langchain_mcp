@@ -1,8 +1,8 @@
 import os
 import gradio as gr
 import asyncio
-from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_mcp_utils import (
     extract_answer,
@@ -15,6 +15,163 @@ from langchain_mcp_utils import (
 
 global_client = None
 global_tools = []
+llm1_name = None
+llm2_name = None
+llm_options = {}
+
+
+# LLMを初期化する関数（ローカル版）
+def initialize_llm_local(llm_name: str) -> ChatOpenAI:
+    """
+    選択されたLLMに基づいてChatOpenAIインスタンスを初期化（main_dual専用）
+    Args:
+        llm_name (str): LLMの名前
+    Returns:
+        ChatOpenAI: 初期化されたChatOpenAIインスタンス
+    """
+    if llm_name in llm_options:
+        llm_config = llm_options[llm_name]
+        if isinstance(llm_config, dict):
+            # 新しい形式: {"model": "...", "base_url": "..."}
+            model = llm_config.get("model", "gpt-4o")
+            base_url = llm_config.get("base_url", "")
+            return initialize_llm(model, base_url)
+        else:
+            # 古い形式: 文字列のbase_url
+            return initialize_llm("gpt-4o", llm_config)
+    else:
+        # デフォルトまたは不明なLLMの場合
+        base_url = ""
+        return initialize_llm("gpt-4o", base_url)
+
+
+# 単一LLM用の非同期チャット関数
+async def single_llm_chat(
+    user_input, history, function_calling, llm_name, system_prompt=""
+) -> str:
+    """
+    単一のLLMに対してチャットを実行する関数
+    Args:
+        user_input (str): ユーザーからの入力
+        history (list): チャット履歴
+        function_calling (str): ツール呼び出しの有効/無効
+        llm_name (str): LLMの名前
+        system_prompt (str): システムプロンプト
+    Returns:
+        str: LLMからの応答
+    """
+    try:
+        # 選択されたLLMでエージェントを初期化
+        current_llm = initialize_llm_local(llm_name)
+        # Gradioの履歴(messages形式)をLangChainの履歴に変換
+        messages = []
+
+        # システムプロンプトがある場合、最初に追加
+        if system_prompt.strip():
+            messages.append({"type": "system", "content": system_prompt.strip()})
+
+        if history:
+            for msg in history:
+                if msg.get("role") == "user":
+                    messages.append({"type": "human", "content": msg["content"]})
+                elif msg.get("role") == "assistant":
+                    messages.append({"type": "ai", "content": msg["content"]})
+        messages.append({"type": "human", "content": user_input})
+        # グローバルツールを使用
+        agent_tools = global_tools if function_calling == "有効" else []
+        agent = create_react_agent(current_llm, agent_tools, debug=True)
+        agent_response = await agent.ainvoke({"messages": messages})
+        answer = extract_answer(agent_response)
+        # ツール履歴抽出（langchain_mcp_utils.pyの関数を使用）
+        tool_history = extract_tool_history(agent_response)
+        if tool_history:
+            answer += f"\n\n[{llm_name} - 呼び出されたツール履歴]\n" + "\n".join(
+                tool_history
+            )
+        return answer
+    except Exception as e:
+        return f"エラーが発生しました ({llm_name}): {str(e)}"
+
+
+# 両方のLLMに同時にプロンプトを送信する関数
+async def dual_llm_chat(user_input, history1, history2, function_calling) -> tuple:
+    """
+    2つのLLMに同時にプロンプトを送信し、結果を返す
+    Args:
+        user_input (str): ユーザーからの入力
+        history1 (list): LLM1のチャット履歴
+        history2 (list): LLM2のチャット履歴
+        function_calling (str): ツール呼び出しの有効/無効
+    Returns:
+        tuple: 各LLMの応答と更新された履歴
+    """
+    if not user_input.strip():
+        return "", history1, "", history2
+
+    # 内部でシステムプロンプトを設定
+    system_prompt = """
+            あなたは親切で知識豊富なAIアシスタントです。ユーザーの質問に対して、正確で分かりやすい回答を提供してください。
+            なお、回答にあたり、以下のルールを守ってください。
+            1. 回答は日本語で行ってください。
+            2. 回答は簡潔で明確にしてください。
+            3. ツール呼び出しが有効な場合は、ツールを利用してください。
+            4. ユーザーの意図を理解しかねる場合は、追加の情報を求めてください。
+            """
+
+    # 両方のLLMに同時にリクエストを送信
+    tasks = [
+        single_llm_chat(
+            user_input, history1, function_calling, llm1_name, system_prompt
+        ),
+        single_llm_chat(
+            user_input, history2, function_calling, llm2_name, system_prompt
+        ),
+    ]
+    responses = await asyncio.gather(*tasks, return_exceptions=True)
+    response1 = (
+        responses[0]
+        if not isinstance(responses[0], Exception)
+        else f"エラー: {responses[0]}"
+    )
+    response2 = (
+        responses[1]
+        if not isinstance(responses[1], Exception)
+        else f"エラー: {responses[1]}"
+    )
+    # 履歴を更新
+    new_history1 = history1 + [
+        {"role": "user", "content": user_input},
+        {"role": "assistant", "content": response1},
+    ]
+    new_history2 = history2 + [
+        {"role": "user", "content": user_input},
+        {"role": "assistant", "content": response2},
+    ]
+    return "", new_history1, "", new_history2
+
+
+def sync_dual_llm_chat(user_input, history1, history2, function_calling) -> tuple:
+    """
+    非同期dual_llm_chat関数を同期的に呼び出すラッパー
+    Args:
+        user_input (str): ユーザーからの入力
+        history1 (list): LLM1のチャット履歴
+        history2 (list): LLM2のチャット履歴
+        function_calling (str): ツール呼び出しの有効/無効
+    Returns:
+        tuple: 各LLMの応答と更新された履歴
+    """
+    return asyncio.run(dual_llm_chat(user_input, history1, history2, function_calling))
+
+
+# 利用可能なツール一覧を取得する関数（ローカル版）
+def sync_get_available_tools_local() -> str:
+    """
+    利用可能なツール取得の同期ラッパー（main_dual専用）
+    Returns:
+        str: 利用可能なツールのリスト
+    """
+    return sync_get_available_tools(global_tools)
 
 
 async def main() -> None:
@@ -27,29 +184,13 @@ async def main() -> None:
         return
 
     # paramsから必要な情報を取得
+    global llm_options
     _, _, llm_options, _, available_llms = get_llm_params(params)
 
     # 2つのLLMを取得（最初の2つ、または同じものを2回）
+    global llm1_name, llm2_name
     llm1_name = available_llms[0] if len(available_llms) >= 1 else "Default"
     llm2_name = available_llms[1] if len(available_llms) >= 2 else available_llms[0]
-
-    # LLMを初期化する関数（ローカル版）
-    def initialize_llm_local(llm_name: str) -> ChatOpenAI:
-        """選択されたLLMに基づいてChatOpenAIインスタンスを初期化（main_dual専用）"""
-        if llm_name in llm_options:
-            llm_config = llm_options[llm_name]
-            if isinstance(llm_config, dict):
-                # 新しい形式: {"model": "...", "base_url": "..."}
-                model = llm_config.get("model", "gpt-4o")
-                base_url = llm_config.get("base_url", "")
-                return initialize_llm(model, base_url)
-            else:
-                # 古い形式: 文字列のbase_url
-                return initialize_llm("gpt-4o", llm_config)
-        else:
-            # デフォルトまたは不明なLLMの場合
-            base_url = params.get("base_url", "")
-            return initialize_llm("gpt-4o", base_url)
 
     # アプリ起動時にclientとtoolsを一度取得して使い回す
     print("=== MCPクライアントとツールを初期化中... ===")
@@ -70,95 +211,6 @@ async def main() -> None:
         print(f"ツール取得エラー: {e}")
         print("プロセスを終了します...")
         os._exit(1)  # 即座にプロセスを強制終了
-
-    # 単一LLM用の非同期チャット関数
-    async def single_llm_chat(user_input, history, function_calling, llm_name) -> str:
-        """
-        単一のLLMに対してチャットを実行する関数
-        """
-        try:
-            # 選択されたLLMでエージェントを初期化
-            current_llm = initialize_llm_local(llm_name)
-
-            # Gradioの履歴(messages形式)をLangChainの履歴に変換
-            messages = []
-            if history:
-                for msg in history:
-                    if msg.get("role") == "user":
-                        messages.append({"type": "human", "content": msg["content"]})
-                    elif msg.get("role") == "assistant":
-                        messages.append({"type": "ai", "content": msg["content"]})
-            messages.append({"type": "human", "content": user_input})
-
-            # グローバルツールを使用
-            agent_tools = global_tools if function_calling == "有効" else []
-
-            agent = create_react_agent(current_llm, agent_tools, debug=True)
-            agent_response = await agent.ainvoke({"messages": messages})
-            answer = extract_answer(agent_response)
-
-            # ツール履歴抽出（langchain_mcp_utils.pyの関数を使用）
-            tool_history = extract_tool_history(agent_response)
-            if tool_history:
-                answer += f"\n\n[{llm_name} - 呼び出されたツール履歴]\n" + "\n".join(
-                    tool_history
-                )
-
-            return answer
-        except Exception as e:
-            return f"エラーが発生しました ({llm_name}): {str(e)}"
-
-    # 両方のLLMに同時にプロンプトを送信する関数
-    async def dual_llm_chat(user_input, history1, history2, function_calling) -> tuple:
-        """
-        2つのLLMに同時にプロンプトを送信し、結果を返す
-        """
-        if not user_input.strip():
-            return "", history1, "", history2
-
-        # 両方のLLMに同時にリクエストを送信
-        tasks = [
-            single_llm_chat(user_input, history1, function_calling, llm1_name),
-            single_llm_chat(user_input, history2, function_calling, llm2_name),
-        ]
-
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-
-        response1 = (
-            responses[0]
-            if not isinstance(responses[0], Exception)
-            else f"エラー: {responses[0]}"
-        )
-        response2 = (
-            responses[1]
-            if not isinstance(responses[1], Exception)
-            else f"エラー: {responses[1]}"
-        )
-
-        # 履歴を更新
-        new_history1 = history1 + [
-            {"role": "user", "content": user_input},
-            {"role": "assistant", "content": response1},
-        ]
-        new_history2 = history2 + [
-            {"role": "user", "content": user_input},
-            {"role": "assistant", "content": response2},
-        ]
-
-        return "", new_history1, "", new_history2
-
-    def sync_dual_llm_chat(user_input, history1, history2, function_calling) -> tuple:
-        """
-        非同期dual_llm_chat関数を同期的に呼び出すラッパー
-        """
-        return asyncio.run(
-            dual_llm_chat(user_input, history1, history2, function_calling)
-        )
-
-    # 利用可能なツール一覧を取得する関数（ローカル版）
-    def sync_get_available_tools_local() -> str:
-        """利用可能なツール取得の同期ラッパー（main_dual専用）"""
-        return sync_get_available_tools(global_tools)
 
     # Gradio UIの構築
     with gr.Blocks(
