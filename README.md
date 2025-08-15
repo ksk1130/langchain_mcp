@@ -8,7 +8,11 @@ LangChainとModel Context Protocol (MCP)を使用したチャットアプリケ�
 - **MCP統合**: Model Context Protocolを使用した外部ツールの呼び出し
 - **複数LLM対応**: OpenAI、Geminiなど複数のLLMプロバイダーをサポート
 - **デュアルLLM機能**: 2つのLLMを並行実行して比較できる機能
+- **システムプロンプト**: 内部でカスタマイズ可能なシステムプロンプト機能
 - **ツール履歴表示**: 実行されたツールの履歴を表示
+- **デバッグ制御**: 設定ファイルでデバッグモードの有効/無効を制御
+- **包括的テスト**: pytestによる自動テスト機能
+- **一括実行**: 複数アプリケーションの同時起動機能
 - **カスタマイズ可能**: 設定ファイルで簡単にカスタマイズ
 
 ## 📋 前提条件
@@ -72,7 +76,8 @@ MCPサーバーとLLMプロバイダーの設定を行います：
       "model": "gpt-4.1", 
       "base_url": "http://127.0.0.1:4000" 
     }
-  }
+  },
+  "debug": "true"
 }
 ```
 
@@ -87,6 +92,11 @@ MCPサーバーとLLMプロバイダーの設定を行います：
 **LLM設定:**
 - `model`: 使用するモデル名
 - `base_url`: LLMプロバイダーのベースURL (ローカルプロキシ等)
+
+**デバッグ設定:**
+- `debug`: デバッグモードの有効/無効 (`"true"` または `"false"`)
+  - `"true"`: LangGraphエージェントの詳細ログを出力
+  - `"false"`: 通常の実行ログのみ出力
 
 ### 2. LiteLLM設定ファイル (`config.yaml`)
 
@@ -131,7 +141,14 @@ uv run main_dual.py
 ./exec_dual.bat      # Windows
 ```
 
-### 3. LiteLLMプロキシサーバー (オプション)
+### 3. 一括実行 (すべてのアプリケーション)
+
+```bash
+# LiteLLMプロキシ、単一LLM、デュアルLLMを同時起動
+./exec_all.bat       # Windows
+```
+
+### 4. LiteLLMプロキシサーバー (オプション)
 
 ```bash
 # LiteLLMプロキシを起動
@@ -149,8 +166,20 @@ uv run litellm --config config.yaml
 2. ブラウザで `http://127.0.0.1:7860` にアクセス
 3. チャットタブでメッセージを入力
 4. ツール呼び出しの有効/無効を選択
-5. 使用するLLMを選択
+5. 使用するLLMを選択（単一LLMモードの場合）
 6. 「利用可能なツール」タブでツール一覧を確認
+
+### 高度な機能
+
+#### システムプロンプト
+- **内部設定**: システムプロンプトは内部で自動設定されます
+- **カスタマイズ**: `main.py`や`main_dual.py`の`system_prompt`変数を編集することで変更可能
+- **一貫性**: 全てのLLMで統一されたシステムプロンプトが適用されます
+
+#### デバッグモード
+- **設定**: `server_params.json`の`"debug"`で制御
+- **有効時**: LangGraphエージェントの詳細なツール呼び出しログを出力
+- **無効時**: 簡潔な実行ログのみ表示
 
 ### ツール機能
 
@@ -175,12 +204,22 @@ uv run pytest -v
 
 ```
 langchain_mcp/
-├── main.py                    # 単一LLMアプリケーション
-├── main_dual.py               # デュアルLLMアプリケーション
-├── langchain_mcp_utils.py     # 共通ユーティリティ関数
-├── test_langchain_mcp_utils.py # テストファイル
-├── server_params.json         # サーバー設定ファイル
-├── config.yaml               # LiteLLM設定ファイル
+├── main.py                      # 単一LLMアプリケーション
+├── main_dual.py                 # デュアルLLMアプリケーション
+├── langchain_mcp_utils.py       # 共通ユーティリティ関数
+├── test_langchain_mcp_utils.py  # テストファイル
+├── server_params.json           # サーバー設定ファイル
+├── config.yaml                  # LiteLLM設定ファイル
+├── pyproject.toml              # プロジェクト設定
+├── requirements.dat            # 依存関係リスト
+├── uv.lock                     # ロックファイル
+├── exec_single.bat             # 単一LLM実行スクリプト (Windows)
+├── exec_dual.bat               # デュアルLLM実行スクリプト (Windows)
+├── exec_all.bat                # 一括実行スクリプト (Windows)
+├── exec_litellmproxy.bat       # LiteLLMプロキシ実行スクリプト (Windows)
+├── exec_pytest.bat             # テスト実行スクリプト (Windows)
+└── README.md                   # このファイル
+```
 ├── pyproject.toml            # プロジェクト設定
 ├── requirements.dat          # 依存関係リスト
 ├── uv.lock                   # ロックファイル
@@ -207,6 +246,27 @@ Configuration error: Missing 'transport' key in server configuration
 ```bash
 # 依存関係を再インストール
 uv sync --reinstall
+```
+
+**4. デバッグログが表示されない**
+- `server_params.json`の`"debug"`設定を確認
+- `"true"`に設定するとLangGraphエージェントの詳細ログが表示
+
+### カスタマイズ
+
+**システムプロンプトの変更:**
+```python
+# main.py または main_dual.py の該当箇所を編集
+system_prompt = "あなたのカスタムシステムプロンプトをここに設定"
+```
+
+**デバッグモードの切り替え:**
+```json
+{
+  "debug": "true"   // 詳細ログ有効
+  // または
+  "debug": "false"  // 簡潔ログのみ
+}
 ```
 
 ### ログとデバッグ
