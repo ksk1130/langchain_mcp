@@ -350,7 +350,7 @@ async def main() -> None:
             [txt, chatbot1, txt, chatbot2],
         )
 
-    demo.launch(share=False, server_name="127.0.0.1", server_port=7860)
+    demo.launch(share=False, server_name="127.0.0.1", server_port=7861)
 
 
 if __name__ == "__main__":
