@@ -18,6 +18,7 @@ global_tools = []
 llm1_name = None
 llm2_name = None
 llm_options = {}
+is_debug = False
 
 
 # LLMを初期化する関数（ローカル版）
@@ -79,7 +80,7 @@ async def single_llm_chat(
         messages.append({"type": "human", "content": user_input})
         # グローバルツールを使用
         agent_tools = global_tools if function_calling == "有効" else []
-        agent = create_react_agent(current_llm, agent_tools, debug=True)
+        agent = create_react_agent(current_llm, agent_tools, debug=is_debug)
         agent_response = await agent.ainvoke({"messages": messages})
         answer = extract_answer(agent_response)
         # ツール履歴抽出（langchain_mcp_utils.pyの関数を使用）
@@ -184,8 +185,9 @@ async def main() -> None:
         return
 
     # paramsから必要な情報を取得
-    global llm_options
+    global llm_options, is_debug
     _, _, llm_options, _, available_llms = get_llm_params(params)
+    is_debug = params.get("debug", "false").lower() == "true"
 
     # 2つのLLMを取得（最初の2つ、または同じものを2回）
     global llm1_name, llm2_name

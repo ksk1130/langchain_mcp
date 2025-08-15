@@ -17,6 +17,7 @@ from langchain_mcp_utils import (
 global_client = None
 global_tools = []
 llm_options = {}
+is_debug = False
 
 
 # Gradio用の非同期チャット関数
@@ -59,7 +60,7 @@ async def gradio_chat(
     messages.append({"type": "human", "content": user_input})
     # グローバルツールを使用
     agent_tools = global_tools if function_calling == "有効" else []
-    agent = create_react_agent(current_llm, agent_tools, debug=True)
+    agent = create_react_agent(current_llm, agent_tools, debug=is_debug)
     agent_response = await agent.ainvoke({"messages": messages})
     answer = extract_answer(agent_response)
     # ツール履歴抽出
@@ -104,10 +105,11 @@ async def main() -> None:
         return
 
     # paramsから必要な情報を取得
-    global llm_options
+    global llm_options, is_debug
     model_name, base_url, llm_options, default_llm, available_llms = get_llm_params(
         params
     )
+    is_debug = params.get("debug", "false").lower() == "true"
 
     # 初期LLMの設定
     llm = initialize_llm(llm_name=model_name, base_url=base_url)
