@@ -12,6 +12,25 @@
     "microsoft.docs.mcp": {
       "transport": "streamable_http",
       "url": "https://learn.microsoft.com/api/mcp"
+    },
+    "duckdb": {
+      "command": "uvx",
+      "transport": "stdio",
+      "args": ["mcp-server-motherduck", "--db-path", ":memory:"]
+    },
+    "awslabs.aws-pricing-mcp-server": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "awslabs.aws-pricing-mcp-server",
+        "awslabs.aws-pricing-mcp-server.exe"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_PROFILE": "hoge",
+        "AWS_REGION": "us-east-1"
+      },
+      "transport": "stdio"
     }
   },
   "llm": {
